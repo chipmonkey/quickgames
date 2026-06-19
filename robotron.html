@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Robotron</title>
+<style>
+   * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+  canvas { display: block; }
+   #ui { position: absolute; top: 0; left: 0; width: 100%; pointer-events: none; padding: 10px 20px; display: flex; justify-content: space-between; }
+   #ui div { font-size: 18px; }
+   #overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    pointer-events: auto; z-index: 10;
+   }
+   #overlay.hidden { display: none; }
+   #overlay h1 { color: #ff4444; font-size: 52px; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 4px; }
+   #overlay p { color: #fff; font-size: 18px; margin-bottom: 6px; }
+   #overlay .sub { color: #aaa; font-size: 14px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+   <div>SCORE: <span id="score">0</span></div>
+   <div>WAVE <span id="wave">1</span></div>
+   <div>&#9829; <span id="lives"></span></div>
+</div>
+<div id="overlay">
+   <h1>ROBOTRON</h1>
+   <p>WASD to move &nbsp;|&nbsp; Mouse to aim &nbsp;|&nbsp; Click to fire</p>
+   <p>Collect all humans to advance to the next wave</p>
+   <p class="sub">Click to start</p>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W = 0, H = 0;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const scoreEl = document.getElementById('score');
+const waveEl = document.getElementById('wave');
+const livesEl = document.getElementById('lives');
+const overlay = document.getElementById('overlay');
+
+const keys = {};
+const mouse = { x: 0, y: 0, down: false };
+window.addEventListener('keydown', function(e) { keys[e.code] = true; });
+window.addEventListener('keyup', function(e) { keys[e.code] = false; });
+window.addEventListener('mousemove', function(e) { mouse.x = e.clientX; mouse.y = e.clientY; });
+window.addEventListener('mousedown', function(e) {
+  mouse.down = true;
+  if (state === 'start') {
+    state = 'playing';
+    overlay.classList.add('hidden');
+    init();
+  } else if (state === 'over') {
+    state = 'playing';
+    overlay.classList.add('hidden');
+    init();
+  }
+});
+window.addEventListener('mouseup', function() { mouse.down = false; });
+
+const PLAYER_SIZE = 12;
+const PLAYER_SPEED = 3.5;
+const BULLET_SPEED = 10;
+const BULLET_SIZE = 3;
+const HUMAN_SIZE = 8;
+const WALL_SIZE = 24;
+const ENEMY_SIZE = 14;
+const SHOOTER_COOLDOWN = 1200;
+const ZOOMER_DELAY = 800;
+
+let state = 'start';
+let score = 0;
+let livesVal = 3;
+let wave = 1;
+let player = null;
+let bullets = [];
+let enemies = [];
+let humans = [];
+let walls = [];
+let particles = [];
+let enemyBullets = [];
+let lastShot = 0;
+let mouseDownFrames = 0;
+
+function dist(x1, y1, x2, y2) {
+  return Math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
+}
+
+function collidesWithWallCircle(x, y, r) {
+  const cols = Math.ceil(W / WALL_SIZE);
+  const rows = Math.ceil(H / WALL_SIZE);
+  for (let wy = 0; wy < rows; wy++) {
+    for (let wx = 0; wx < cols; wx++) {
+      if (walls[wy] && walls[wy][wx] === 1) {
+        const wallX = wx * WALL_SIZE + WALL_SIZE / 2;
+        const wallY = wy * WALL_SIZE + WALL_SIZE / 2;
+        const adx = Math.abs(x - wallX);
+        const ady = Math.abs(y - wallY);
+        if (adx < WALL_SIZE / 2 + r && ady < WALL_SIZE / 2 + r) {
+          const closeX = Math.max(0, adx - WALL_SIZE / 2);
+          const closeY = Math.max(0, ady - WALL_SIZE / 2);
+          if (closeX * closeX + closeY * closeY < r * r) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function canMoveTo(x, y, size) {
+  if (x - size < 0 || x + size > W || y - size < 0 || y + size > H) return false;
+  return !collidesWithWallCircle(x, y, size);
+}
+
+function findEmptySpot(mfx, mfy, mindist, size) {
+  let tries = 0;
+  while (tries < 100) {
+    const cols = Math.ceil(W / WALL_SIZE);
+    const rows = Math.ceil(H / WALL_SIZE);
+    const wx = 1 + Math.floor(Math.random() * (cols - 2));
+    const wy = 1 + Math.floor(Math.random() * (rows - 2));
+    const x = wx * WALL_SIZE + WALL_SIZE / 2;
+    const y = wy * WALL_SIZE + WALL_SIZE / 2;
+    if (dist(x, y, mfx, mfy) > mindist && !collidesWithWallCircle(x, y, size)) {
+      return { x: x, y: y };
+    }
+    tries++;
+  }
+  return { x: mfx + 150, y: mfy + 150 };
+}
+
+function generateWalls() {
+  const cols = Math.ceil(W / WALL_SIZE);
+  const rows = Math.ceil(H / WALL_SIZE);
+  const grid = [];
+  for (let y = 0; y < rows; y++) {
+    grid[y] = [];
+    for (let x = 0; x < cols; x++) {
+      grid[y][x] = 0;
+    }
+  }
+  for (let x = 0; x < cols; x++) {
+    grid[0][x] = 1;
+    grid[rows - 1][x] = 1;
+  }
+  for (let y = 0; y < rows; y++) {
+    grid[y][0] = 1;
+    grid[y][cols - 1] = 1;
+  }
+  const wallCount = Math.floor(cols * rows * 0.06);
+  for (let i = 0; i < wallCount; i++) {
+    const x = 2 + Math.floor(Math.random() * (cols - 4));
+    const y = 2 + Math.floor(Math.random() * (rows - 4));
+    const cx = Math.floor(cols / 2);
+    const cy = Math.floor(rows / 2);
+    if (Math.abs(x - cx) < 3 && Math.abs(y - cy) < 3) continue;
+    grid[y][x] = 1;
+  }
+  for (let y = 2; y < rows - 2; y++) {
+    if (Math.random() < 0.3) {
+      const x = Math.floor(Math.random() * (cols - 6)) + 3;
+      if (x + 2 < cols - 2) grid[y][x] = 0;
+    }
+  }
+  return grid;
+}
+
+function init() {
+  score = 0;
+  livesVal = 3;
+  wave = 1;
+  walls = generateWalls();
+  const cx = W / 2;
+  const cy = H / 2;
+  player = { x: cx, y: cy, angle: -Math.PI / 2, invincible: 120 };
+  bullets = [];
+  enemyBullets = [];
+  particles = [];
+  humans = [];
+  enemies = [];
+
+  const wobbleCount = 4 + wave * 2;
+  const zoomerCount = 2 + Math.floor(wave * 1.5);
+  const shooterCount = Math.min(wave, 6);
+
+  for (let i = 0; i < wobbleCount; i++) {
+    const spot = findEmptySpot(cx, cy, 250, ENEMY_SIZE);
+    enemies.push({ type: 'wobble', x: spot.x, y: spot.y, vx: 0, vy: 0, size: ENEMY_SIZE });
+  }
+  for (let i = 0; i < zoomerCount; i++) {
+    const spot = findEmptySpot(cx, cy, 250, ENEMY_SIZE);
+    enemies.push({ type: 'zoomer', x: spot.x, y: spot.y, vx: 0, vy: 0, state: 'wait', waitTimer: 0, size: ENEMY_SIZE, zAngle: Math.random() * Math.PI * 2 });
+  }
+  for (let i = 0; i < shooterCount; i++) {
+    const spot = findEmptySpot(cx, cy, 250, ENEMY_SIZE);
+    enemies.push({ type: 'shooter', x: spot.x, y: spot.y, vx: 0, vy: 0, size: ENEMY_SIZE, cooldown: SHOOTER_COOLDOWN });
+  }
+
+  const humanCount = 4 + wave;
+  for (let i = 0; i < humanCount; i++) {
+    const spot = findEmptySpot(cx, cy, 180, HUMAN_SIZE);
+    humans.push({ x: spot.x, y: spot.y });
+  }
+}
+
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const spd = Math.random() * 3 + 1;
+    particles.push({ x: x, y: y, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd, color: color, life: 20 + Math.random() * 20 });
+  }
+}
+
+function playerHit() {
+  livesVal--;
+  spawnParticles(player.x, player.y, '#ff8800', 25);
+  player.invincible = 150;
+  if (livesVal <= 0) {
+    state = 'over';
+    overlay.classList.remove('hidden');
+    overlay.innerHTML = '<h1>GAME OVER</h1><p>Score: ' + score + '</p><p>Wave: ' + wave + '</p><p class="sub">Click to restart</p>';
+  }
+}
+
+function update(dt) {
+  if (state !== 'playing') return;
+
+  let dx = 0;
+  let dy = 0;
+  if (keys['KeyW'] || keys['ArrowUp']) dy -= 1;
+  if (keys['KeyS'] || keys['ArrowDown']) dy += 1;
+  if (keys['KeyA'] || keys['ArrowLeft']) dx -= 1;
+  if (keys['KeyD'] || keys['ArrowRight']) dx += 1;
+
+  if (dx !== 0 || dy !== 0) {
+    const len = Math.sqrt(dx * dx + dy * dy);
+    dx = dx / len * PLAYER_SPEED;
+    dy = dy / len * PLAYER_SPEED;
+  }
+  const nx = player.x + dx;
+  const ny = player.y + dy;
+  if (canMoveTo(nx, player.y, PLAYER_SIZE)) player.x = nx;
+  if (canMoveTo(player.x, ny, PLAYER_SIZE)) player.y = ny;
+
+  player.angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+  player.invincible = Math.max(0, player.invincible - 1);
+
+  if (mouse.down) {
+    mouseDownFrames++;
+    if (mouseDownFrames >= 8) {
+      const now = Date.now();
+      if (now - lastShot > 180) {
+        bullets.push({
+          x: player.x + Math.cos(player.angle) * 20,
+          y: player.y + Math.sin(player.angle) * 20,
+          vx: Math.cos(player.angle) * BULLET_SPEED,
+          vy: Math.sin(player.angle) * BULLET_SPEED
+        });
+        lastShot = now;
+        mouseDownFrames = 0;
+      }
+    }
+  } else {
+    mouseDownFrames = 0;
+  }
+
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+    b.x += b.vx;
+    b.y += b.vy;
+    if (collidesWithWallCircle(b.x, b.y, BULLET_SIZE)) {
+      bullets.splice(i, 1);
+      spawnParticles(b.x, b.y, '#ff0', 5);
+      continue;
+    }
+    if (b.x < 0 || b.x > W || b.y < 0 || b.y > H) {
+      bullets.splice(i, 1);
+    }
+  }
+
+  for (let i = enemyBullets.length - 1; i >= 0; i--) {
+    const b = enemyBullets[i];
+    b.x += b.vx;
+    b.y += b.vy;
+    if (collidesWithWallCircle(b.x, b.y, 2)) {
+      enemyBullets.splice(i, 1);
+      continue;
+    }
+    if (player.invincible <= 0 && dist(b.x, b.y, player.x, player.y) < PLAYER_SIZE) {
+      playerHit();
+      enemyBullets.splice(i, 1);
+      continue;
+    }
+    if (b.x < 0 || b.x > W || b.y < 0 || b.y > H) {
+      enemyBullets.splice(i, 1);
+    }
+  }
+
+  for (let e = 0; e < enemies.length; e++) {
+    const en = enemies[e];
+    if (en.type === 'wobble') {
+      if (Math.random() < 0.02) {
+        const a = Math.random() * Math.PI * 2;
+        en.vx = Math.cos(a) * 1.2;
+        en.vy = Math.sin(a) * 1.2;
+      }
+      const enx = en.x + en.vx;
+      const eny = en.y + en.vy;
+      if (!canMoveTo(enx, eny, en.size)) {
+        en.vx = -en.vx;
+        en.vy = -en.vy;
+      } else {
+        en.x = enx;
+        en.y = eny;
+      }
+    } else if (en.type === 'zoomer') {
+      en.waitTimer += dt;
+      if (en.state === 'wait') {
+        if (en.waitTimer >= ZOOMER_DELAY) {
+          en.state = 'zoom';
+          const a = Math.atan2(player.y - en.y, player.x - en.x);
+          en.zAngle = a;
+          en.vx = Math.cos(a) * 5;
+          en.vy = Math.sin(a) * 5;
+          en.waitTimer = 0;
+        }
+        en.x += Math.cos(en.zAngle) * 0.3;
+        en.y += Math.sin(en.zAngle) * 0.3;
+      } else if (en.state === 'zoom') {
+        en.x += Math.cos(en.zAngle) * 5;
+        en.y += Math.sin(en.zAngle) * 5;
+        if (!canMoveTo(en.x, en.y, en.size)) {
+          en.zAngle += (Math.random() > 0.5 ? 1 : -1) * Math.PI * 0.4;
+          en.x -= Math.cos(en.zAngle) * 5;
+          en.y -= Math.sin(en.zAngle) * 5;
+        }
+        if (dist(en.x, en.y, player.x, player.y) > Math.max(W, H) * 0.7) {
+          en.state = 'wait';
+          en.waitTimer = 0;
+          en.vx = 0;
+          en.vy = 0;
+        }
+      }
+    } else if (en.type === 'shooter') {
+      en.cooldown -= dt;
+      en.shotAngle = Math.atan2(player.y - en.y, player.x - en.x);
+      if (en.cooldown <= 0) {
+        enemyBullets.push({
+          x: en.x,
+          y: en.y,
+          vx: Math.cos(en.shotAngle) * 3.5,
+          vy: Math.sin(en.shotAngle) * 3.5
+        });
+        en.cooldown = SHOOTER_COOLDOWN;
+      }
+      const spd = dist(en.x, en.y, player.x, player.y);
+      if (spd < 150) {
+        en.x -= (player.x - en.x) / spd * 0.3;
+        en.y -= (player.y - en.y) / spd * 0.3;
+      }
+    }
+  }
+
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+    for (let j = enemies.length - 1; j >= 0; j--) {
+      if (dist(b.x, b.y, enemies[j].x, enemies[j].y) < ENEMY_SIZE + BULLET_SIZE) {
+        let pts = 30;
+        if (enemies[j].type === 'zoomer') pts = 50;
+        if (enemies[j].type === 'shooter') pts = 75;
+        score += pts;
+        spawnParticles(enemies[j].x, enemies[j].y,
+          enemies[j].type === 'zoomer' ? '#44ff44' : enemies[j].type === 'shooter' ? '#4444ff' : '#ff4444', 15);
+        enemies.splice(j, 1);
+        bullets.splice(i, 1);
+        break;
+      }
+    }
+  }
+
+  if (player.invincible <= 0) {
+    for (let e = 0; e < enemies.length; e++) {
+      if (dist(player.x, player.y, enemies[e].x, enemies[e].y) < PLAYER_SIZE + ENEMY_SIZE) {
+        playerHit();
+        break;
+      }
+    }
+  }
+
+  for (let i = humans.length - 1; i >= 0; i--) {
+    if (dist(player.x, player.y, humans[i].x, humans[i].y) < PLAYER_SIZE + HUMAN_SIZE) {
+      score += 25;
+      const hx = humans[i].x;
+      const hy = humans[i].y;
+      humans.splice(i, 1);
+      spawnParticles(hx, hy, '#ff88ff', 8);
+    }
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    particles[i].x += particles[i].vx;
+    particles[i].y += particles[i].vy;
+    particles[i].life -= 1;
+    if (particles[i].life <= 0) particles.splice(i, 1);
+  }
+
+  if (humans.length === 0 && enemies.length === 0) {
+    wave++;
+    walls = generateWalls();
+    player.x = W / 2;
+    player.y = H / 2;
+    for (let i = 0; i < 5 + wave * 2; i++) {
+      const s = findEmptySpot(W / 2, H / 2, 250, ENEMY_SIZE);
+      enemies.push({ type: 'wobble', x: s.x, y: s.y, vx: 0, vy: 0, size: ENEMY_SIZE });
+    }
+    for (let i = 0; i < 2 + Math.floor(wave * 1.5); i++) {
+      const s = findEmptySpot(W / 2, H / 2, 250, ENEMY_SIZE);
+      enemies.push({ type: 'zoomer', x: s.x, y: s.y, vx: 0, vy: 0, state: 'wait', waitTimer: 0, size: ENEMY_SIZE, zAngle: Math.random() * Math.PI * 2 });
+    }
+    for (let i = 0; i < Math.min(wave + 1, 8); i++) {
+      const s = findEmptySpot(W / 2, H / 2, 250, ENEMY_SIZE);
+      enemies.push({ type: 'shooter', x: s.x, y: s.y, vx: 0, vy: 0, size: ENEMY_SIZE, cooldown: SHOOTER_COOLDOWN });
+    }
+    for (let i = 0; i < 5 + wave; i++) {
+      const s = findEmptySpot(W / 2, H / 2, 180, HUMAN_SIZE);
+      humans.push({ x: s.x, y: s.y });
+    }
+  }
+
+  scoreEl.textContent = score;
+  waveEl.textContent = wave;
+  let lvstr = '';
+  for (let i = 0; i < Math.max(0, livesVal); i++) lvstr += '\u2665';
+  livesEl.textContent = lvstr;
+}
+
+function draw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  if (walls && walls.length > 0) {
+    ctx.fillStyle = '#333';
+    for (let wy = 0; wy < walls.length; wy++) {
+      if (!walls[wy]) continue;
+      for (let wx = 0; wx < walls[wy].length; wx++) {
+        if (walls[wy][wx] === 1) {
+          ctx.fillRect(wx * WALL_SIZE, wy * WALL_SIZE, WALL_SIZE, WALL_SIZE);
+          ctx.strokeStyle = '#444';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(wx * WALL_SIZE, wy * WALL_SIZE, WALL_SIZE, WALL_SIZE);
+        }
+      }
+    }
+  }
+
+  if (humans) {
+    for (let i = 0; i < humans.length; i++) {
+      const h = humans[i];
+      ctx.fillStyle = '#ff88ff';
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, HUMAN_SIZE, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(h.x - 4, h.y - 3, 2, 2);
+      ctx.fillRect(h.x + 2, h.y - 3, 2, 2);
+    }
+  }
+
+  if (bullets) {
+    for (let i = 0; i < bullets.length; i++) {
+      const b = bullets[i];
+      ctx.fillStyle = '#ffff00';
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, BULLET_SIZE, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  if (enemyBullets) {
+    for (let i = 0; i < enemyBullets.length; i++) {
+      const b = enemyBullets[i];
+      ctx.fillStyle = '#4444ff';
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  if (enemies) {
+    for (let i = 0; i < enemies.length; i++) {
+      const en = enemies[i];
+      if (en.type === 'wobble') {
+        ctx.fillStyle = '#ff4444';
+        ctx.fillRect(en.x - ENEMY_SIZE / 2, en.y - ENEMY_SIZE / 2, ENEMY_SIZE, ENEMY_SIZE);
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(en.x - 4, en.y - 3, 3, 3);
+        ctx.fillRect(en.x + 1, en.y - 3, 3, 3);
+      } else if (en.type === 'zoomer') {
+        ctx.fillStyle = en.state === 'zoom' ? '#ff8800' : '#44ff44';
+        ctx.beginPath();
+        ctx.arc(en.x, en.y, ENEMY_SIZE / 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (en.type === 'shooter') {
+        ctx.fillStyle = '#4444ff';
+        ctx.beginPath();
+        ctx.arc(en.x, en.y, ENEMY_SIZE / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#8888ff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(en.x, en.y);
+        ctx.lineTo(en.x + Math.cos(en.shotAngle || 0) * 12, en.y + Math.sin(en.shotAngle || 0) * 12);
+        ctx.stroke();
+      }
+    }
+  }
+
+  if (player) {
+    if (player.invincible <= 0 || Math.floor(player.invincible / 4) % 2 === 0) {
+      ctx.save();
+      ctx.translate(player.x, player.y);
+      ctx.rotate(player.angle);
+      ctx.fillStyle = '#ff8800';
+      ctx.beginPath();
+      ctx.moveTo(PLAYER_SIZE + 4, 0);
+      ctx.lineTo(-PLAYER_SIZE * 0.7, -PLAYER_SIZE * 0.6);
+      ctx.lineTo(-PLAYER_SIZE * 0.4, 0);
+      ctx.lineTo(-PLAYER_SIZE * 0.7, PLAYER_SIZE * 0.6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  if (particles) {
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
+      ctx.globalAlpha = Math.min(1, p.life / 40);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+let lastTime = 0;
+function loop(now) {
+  const dt = now - lastTime;
+  lastTime = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
