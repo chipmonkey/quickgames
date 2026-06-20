@@ -39,10 +39,11 @@
       <h3>Lines</h3>
       <div class="val" id="lines">0</div>
     </div>
-    <div class="panel">
-      <h3>Next</h3>
-      <canvas id="next" width="120" height="120"></canvas>
-    </div>
+      <div class="panel">
+        <h3>Next</h3>
+        <canvas id="next" width="120" height="120"></canvas>
+        <div id="nextInfo" style="font-size:12px; margin-top:4px; color:#888;"></div>
+      </div>
     <div class="panel">
       <h3>Controls</h3>
       <div style="font-size:12px; line-height:1.8;">
@@ -117,16 +118,14 @@ function init() {
     }
   }
   let bag = randomBag();
-  let nextBag = randomBag();
   score = 0;
   lines = 0;
   totalLines = 0;
   level = 1;
   tickTimer = 0;
-  const p = spawn(bag.shift());
-  piece = p;
-  nextPiece = spawn(nextBag.shift());
-  dropQueue = bag.concat(nextBag.slice(0, 2));
+  dropQueue = bag;
+  piece = spawn(dropQueue.shift());
+  nextPiece = spawn(dropQueue.shift());
 }
 
 function spawn(type) {
@@ -224,7 +223,7 @@ function lock() {
       dropQueue.push(bag[i]);
     }
   }
-  piece = spawn(dropQueue.shift());
+  piece = nextPiece;
   if (!valid(piece)) {
     state = 'over';
     showGameOver();
@@ -316,9 +315,9 @@ window.addEventListener('keydown', function(e) {
     e.preventDefault();
   }
   if (e.code === 'ArrowDown') {
-    tickTimer += 20;
+    keys['ArrowDown'] = true;
     e.preventDefault();
-  }
+   }
   if (e.code === 'Space') {
     const gy = getGhostY();
     score += (gy - piece.y) * 2;
@@ -369,7 +368,7 @@ function drawBoard() {
     const gy = getGhostY();
     if (gy !== piece.y) {
       for (let i = 0; i < piece.cells.length; i++) {
-        const gx = piece.cells[i][0];
+        const gx = piece.x + piece.cells[i][0];
         const gy2 = gy + piece.cells[i][1];
         if (gy2 >= 0) drawCell(ctx, gx, gy2, piece.color + '33');
       }
@@ -414,15 +413,18 @@ function loop(now) {
   if (state === 'playing' && piece) {
     tickTimer += dt;
     const tick = Math.max(TICK_MIN, TICK_BASE - (level - 1) * 60);
+    if (keys['ArrowDown']) {
+      tickTimer += dt * 6;
+    }
     if (tickTimer >= tick) {
       tickTimer = 0;
       piece.y++;
       if (!valid(piece)) {
         piece.y--;
         lock();
+       }
       }
     }
-  }
 
   drawBoard();
   updateUI();
