@@ -254,11 +254,11 @@ function update() {
   for (let i = 0; i < bricks.length; i++) {
     if (bricks[i].alive) aliveCount++;
   }
-  if (aliveCount === 0 && ballAttached && level > 0) {
-    spawnLevel(level + 1);
-    level++;
+  if (aliveCount === 0) {
     ballAttached = true;
     ball = null;
+    spawnLevel(level + 1);
+    level++;
     score += level * 50;
     scoreEl.textContent = score;
   }
