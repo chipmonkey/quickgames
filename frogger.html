@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frogger</title>
+<style>
+     * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+    canvas { display: block; }
+     #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+     #score { color: #fff; font-size: 20px; position: absolute; top: 16px; left: 20px; letter-spacing: 2px; }
+     #lives { color: #44ff44; font-size: 20px; position: absolute; top: 16px; right: 20px; }
+     #overlay {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        pointer-events: auto; z-index: 10;
+     }
+     #overlay.hidden { display: none; }
+     #overlay h1 { color: #44ff44; font-size: 56px; margin-bottom: 16px; letter-spacing: 8px; text-transform: uppercase; }
+     #overlay p { color: #ccc; font-size: 18px; margin-bottom: 6px; }
+     #overlay .sub { color: #888; font-size: 14px; margin-top: 20px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">
+     <div id="score">SCORE: 0</div>
+     <div id="lives"></div>
+     <div id="overlay">
+         <h1>Frogger</h1>
+         <p>Reach the home row at the top</p>
+         <p style="color:#666; margin-top:10px;">Arrow keys or WASD — Move frog</p>
+         <p class="sub">Dodge cars, ride logs across the river</p>
+     </div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+let W, H, CW, CH;
+let frog, cars, logs, score, lives, level, frame = 0;
+let running = false;
+const COLS = 11;
+const ROWS = 13;
+const START_LIVES = 3;
+const GOAL_SCORE = 1700;
+
+// Row layout:
+// 0: Home row (goal)
+// 1: Water strip (safe)
+// 2-5: Road (cars)
+// 6: Median (safe)
+// 7-10: River (logs)
+// 11-12: Start area (safe)
+
+function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    CW = W / COLS;
+    CH = H / ROWS;
+}
+resize();
+window.addEventListener('resize', resize);
+
+function spawnCars() {
+    cars = [];
+    const rows = [
+         { row: 2, speed: 2.2, dir: 1, w: 1.2 },
+         { row: 3, speed: 3.2, dir: -1, w: 1.5 },
+         { row: 4, speed: 2.8, dir: 1, w: 0.8 },
+         { row: 5, speed: 3.6, dir: -1, w: 1.1 },
+     ];
+    rows.forEach(r => {
+        const count = 2 + Math.floor(Math.random() * 2);
+        const spd = r.speed * (1 + (level - 1) * 0.25);
+        for (let i = 0; i < count; i++) {
+            const x = (W / count) * i + Math.random() * (W / count) - 30;
+            cars.push({
+                x: x,
+                row: r.row,
+                y: r.row * CH,
+                w: CW * r.w,
+                h: CH * 0.7,
+                speed: spd * r.dir
+             });
+         }
+     });
+}
+
+function spawnLogs() {
+    logs = [];
+    const rows = [
+         { row: 7, speed: 2.0, dir: 1, w: 1.8 },
+         { row: 8, speed: 2.8, dir: -1, w: 2.2 },
+         { row: 9, speed: 1.8, dir: 1, w: 2.5 },
+         { row: 10, speed: 2.6, dir: -1, w: 1.5 },
+     ];
+    rows.forEach(r => {
+        const count = 2 + Math.floor(Math.random());
+        const spd = r.speed * (1 + (level - 1) * 0.25);
+        for (let i = 0; i < count; i++) {
+            const x = (W / count) * i - 50 + Math.random() * 60;
+            logs.push({
+                x: x,
+                row: r.row,
+                y: r.row * CH,
+                w: CW * r.w,
+                h: CH * 0.7,
+                speed: spd * r.dir
+             });
+         }
+     });
+}
+
+function initGame() {
+    const mid = Math.floor(COLS / 2);
+    frog = { col: mid, row: ROWS - 1 };
+    frog.x = mid * CW + CW / 2;
+    frog.y = (ROWS - 1) * CH + CH / 2;
+    score = 0;
+    lives = START_LIVES;
+    level = 1;
+    spawnCars();
+    spawnLogs();
+    updateUI();
+}
+
+function updateUI() {
+    document.getElementById('score').textContent = `SCORE: ${score} | ${level > 1 ? 'Lv ' + level : ''}`;
+    document.getElementById('lives').textContent = '';
+    for (let i = 0; i < lives; i++) document.getElementById('lives').textContent += '🐸';
+}
+
+function startGame() {
+    running = true;
+    document.getElementById('overlay').classList.add('hidden');
+    initGame();
+}
+
+function showOverlay(title, color) {
+    running = false;
+    const ov = document.getElementById('overlay');
+    ov.classList.remove('hidden');
+    const h1 = ov.querySelector('h1');
+    h1.textContent = title;
+    h1.style.color = color;
+    ov.querySelector('p').textContent = `Final score: ${score}`;
+    ov.querySelector('.sub').textContent = title.includes('Win') ? 'Congratulations!' : 'Press any key to restart';
+}
+
+window.addEventListener('keydown', e => {
+    if (!running) { startGame(); return; }
+    switch(e.key) {
+        case 'ArrowUp': case 'w': case 'W':
+            frog.row = Math.max(0, frog.row - 1); break;
+        case 'ArrowDown': case 's': case 'S':
+            frog.row = Math.min(ROWS - 1, frog.row + 1); break;
+        case 'ArrowLeft': case 'a': case 'A':
+            frog.col = Math.max(0, frog.col - 1); break;
+        case 'ArrowRight': case 'd': case 'D':
+            frog.col = Math.min(COLS - 1, frog.col + 1); break;
+     }
+    frog.x = frog.col * CW + CW / 2;
+    frog.y = frog.row * CH + CH / 2;
+});
+
+function rectsOverlap(a, b, margin) {
+    margin = margin || 0;
+    return a.x - a.w / 2 + margin < b.x + b.w / 2 - margin &&
+           a.x + a.w / 2 - margin > b.x - b.w / 2 + margin &&
+           a.y - a.h / 2 + margin < b.y + b.h / 2 - margin &&
+           a.y + a.h / 2 - margin > b.y - b.h / 2 + margin;
+}
+
+function die() {
+    lives--;
+    updateUI();
+    if (lives <= 0) { showOverlay('Game Over', '#ff4444'); return; }
+    frog.row = ROWS - 1;
+    frog.col = Math.floor(COLS / 2);
+    frog.x = frog.col * CW + CW / 2;
+    frog.y = frog.row * CH + CH / 2;
+}
+
+function win() {
+    showOverlay('You Win!', '#44ff44');
+}
+
+function resetFrog() {
+    frog.row = ROWS - 1;
+    frog.col = Math.floor(COLS / 2);
+    frog.x = frog.col * CW + CW / 2;
+    frog.y = frog.row * CH + CH / 2;
+}
+
+function checkCarCollision() {
+    for (let car of cars) {
+        const cb = {
+            x: car.x + CW * 0.1,
+            y: car.y + CH * 0.15,
+            w: car.w - CW * 0.2,
+            h: car.h - CH * 0.3
+        };
+        if (rectsOverlap(
+            { x: frog.x, y: frog.y, w: CW * 0.5, h: CH * 0.6 },
+            cb, CW * 0.1
+        )) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function checkLogSupport() {
+    for (let log of logs.filter(l => l.row === frog.row)) {
+        const lb = {
+            x: log.x,
+            y: log.y + CH * 0.2,
+            w: log.w,
+            h: log.h - CH * 0.4
+        };
+        if (rectsOverlap(
+            { x: frog.x, y: frog.y, w: CW * 0.5, h: CH * 0.6 },
+            lb, 0
+        )) {
+            return log;
+        }
+    }
+    return null;
+}
+
+function update() {
+    if (!running) return;
+    frame++;
+
+     // Move cars
+    for (let car of cars) {
+        car.x += car.speed;
+        if (car.speed > 0 && car.x > W) car.x = -car.w;
+        if (car.speed < 0 && car.x + car.w < 0) car.x = W;
+    }
+
+     // Move logs
+    for (let log of logs) {
+        log.x += log.speed;
+        if (log.speed > 0 && log.x > W) log.x = -log.w;
+        if (log.speed < 0 && log.x + log.w < 0) log.x = W;
+    }
+
+     // Frog hitbox center
+    const fb = { x: frog.x, y: frog.y, w: CW * 0.5, h: CH * 0.6 };
+
+     // Road rows (2-5): check car collision
+    if (frog.row >= 2 && frog.row <= 5) {
+        if (checkCarCollision()) { die(); return; }
+    }
+
+     // River rows (7-10): must be on a log
+    if (frog.row >= 7 && frog.row <= 10) {
+        const onLog = checkLogSupport();
+        if (onLog) {
+            frog.x += onLog.speed;
+        } else {
+            die();
+            return;
+        }
+    }
+
+     // Off screen on river
+    if (frog.row >= 7 && frog.row <= 10 &&
+        (frog.x < 0 || frog.x > W)) {
+        die();
+        return;
+    }
+
+     // Reached home
+    if (frog.row === 0) {
+        score += 100;
+        if (score >= GOAL_SCORE) {
+            win();
+            return;
+        }
+        resetFrog();
+        updateUI();
+        return;
+    }
+
+    updateUI();
+}
+
+function drawRoad() {
+     // Rows 2-6
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, CH * 2, W, CH * 5);
+     // Lane markings
+    ctx.strokeStyle = '#333';
+    ctx.setLineDash([8, 8]);
+    for (let i = 3; i <= 5; i++) {
+        ctx.beginPath();
+        ctx.moveTo(0, CH * i);
+        ctx.lineTo(W, CH * i);
+        ctx.stroke();
+    }
+    ctx.setLineDash([]);
+}
+
+function drawRiver() {
+     // Rows 7-11
+    ctx.fillStyle = '#0a2a5a';
+    ctx.fillRect(0, CH * 6, W, CH * 6);
+     // Water ripple
+    ctx.fillStyle = 'rgba(255,255,255,0.04)';
+    for (let i = 0; i < 10; i++) {
+        const ry = CH * 7 + ((frame * 0.8 + i * 55) % (CH * 4));
+        const rx = (i * 130 + frame * 2) % (W + 100) - 50;
+        ctx.fillRect(rx, ry, 60, 2);
+    }
+}
+
+function drawMedian() {
+     // Row 6
+    ctx.fillStyle = '#1a3a1a';
+    ctx.fillRect(0, CH * 6, W, CH);
+}
+
+function drawHomes() {
+     // Row 0: home slots
+    ctx.fillStyle = '#0a2a5a';
+    ctx.fillRect(0, 0, W, CH);
+     // Each other column has a home slot
+    for (let i = 0; i < COLS; i++) {
+        if (i % 2 === 0) continue;
+        ctx.fillStyle = '#1a5a2a';
+        ctx.fillRect(i * CW + CW * 0.1, CH * 0.15, CW * 0.8, CH * 0.7);
+    }
+     // Row 1: water strip
+    ctx.fillStyle = '#0a2a5a';
+    ctx.fillRect(0, CH, W, CH);
+}
+
+function drawStartArea() {
+     // Rows 11-12
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, CH * 11, W, CH * 2);
+    ctx.fillStyle = '#222';
+    ctx.fillRect(0, CH * 11, W, 2);
+}
+
+function drawCars() {
+    for (let car of cars) {
+        ctx.fillStyle = '#ff3344';
+        const bx = car.x + CW * 0.1;
+        const by = car.y + CH * 0.15;
+        const bw = car.w - CW * 0.2;
+        const bh = car.h - CH * 0.3;
+        ctx.fillRect(bx, by, bw, bh);
+         // Window
+        ctx.fillStyle = '#ffcc44';
+        const wx = car.speed > 0 ? bx + bw * 0.5 : bx + bw * 0.1;
+        ctx.fillRect(wx, by + bh * 0.15, bw * 0.35, bh * 0.7);
+    }
+}
+
+function drawLogs() {
+    for (let log of logs) {
+        ctx.fillStyle = '#8B4513';
+        ctx.fillRect(log.x, log.y + CH * 0.2, log.w, log.h - CH * 0.4);
+         // Texture
+        ctx.fillStyle = '#6B3510';
+        ctx.fillRect(log.x + CW * 0.1, log.y + CH * 0.35, CW * 0.3, 2);
+        ctx.fillRect(log.x + log.w - CW * 0.4, log.y + CH * 0.35, CW * 0.3, 2);
+    }
+}
+
+function drawFrog() {
+    if (!running || !frog) return;
+    const x = frog.x;
+    const y = frog.y;
+    const s = CW * 0.3;
+
+     // Body
+    ctx.fillStyle = '#44ff44';
+    ctx.beginPath();
+    ctx.arc(x, y, s, 0, Math.PI * 2);
+    ctx.fill();
+
+     // Eyes
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(x - s * 0.35, y - s * 0.25, s * 0.2, 0, Math.PI * 2);
+    ctx.arc(x + s * 0.35, y - s * 0.25, s * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function draw() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    drawHomes();
+    drawRoad();
+    drawMedian();
+    drawRiver();
+    drawStartArea();
+    drawCars();
+    drawLogs();
+    drawFrog();
+
+     // Bottom status
+    ctx.fillStyle = '#333';
+    ctx.font = '14px Courier New';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${Math.min(score, GOAL_SCORE)} / ${GOAL_SCORE}`, W - 20, H - 10);
+}
+
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>

@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Doodle Jump</title>
+<style>
+     * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+    canvas { display: block; }
+     #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+     #score { color: #fff; font-size: 24px; position: absolute; top: 20px; right: 20px; letter-spacing: 2px; }
+     #overlay {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        pointer-events: auto; z-index: 10;
+     }
+     #overlay.hidden { display: none; }
+     #overlay h1 { color: #44ff44; font-size: 56px; margin-bottom: 16px; letter-spacing: 8px; text-transform: uppercase; }
+     #overlay p { color: #ccc; font-size: 18px; margin-bottom: 6px; }
+     #overlay .sub { color: #888; font-size: 14px; margin-top: 20px; }
+     #highscore { color: #f5e042; font-size: 18px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">
+     <div id="score">0</div>
+     <div id="overlay">
+         <h1>Doodle Jump</h1>
+         <p>Bounce as high as you can!</p>
+         <p style="color:#666; margin-top:10px;">← → or A/D — Move left/right</p>
+         <p class="sub">Press any key to start</p>
+         <div id="highscore">Best: 0</div>
+     </div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const PLAT_W = 80;
+const PLAT_H = 16;
+const DODEL_SIZE = 40;
+
+let dodel, platforms, score, frame = 0, cameraY = 0;
+let running = false;
+let keys = {};
+let highScore = parseInt(localStorage.getItem('doodleHighScore') || '0');
+
+function init() {
+    dodel = {
+        x: W / 2 - DODEL_SIZE / 2,
+        y: H - DODEL_SIZE * 2,
+        w: DODEL_SIZE,
+        h: DODEL_SIZE,
+        vx: 0,
+        vy: 0,
+        dir: 0 // -1 left, 0 none, 1 right
+    };
+    
+    platforms = [];
+    score = 0;
+    frame = 0;
+    cameraY = 0;
+    
+    // Generate starting platforms
+    for (let i = 0; i < 10; i++) {
+        platforms.push({
+            x: Math.random() * (W - PLAT_W),
+            y: H - i * 90 - 100,
+            w: PLAT_W,
+            h: PLAT_H,
+            type: 'normal' // normal, moving, breaking
+        });
+    }
+    // First platform always under dodel
+    platforms[0].x = dodel.x - (PLAT_W - DODEL_SIZE) / 2;
+    platforms[0].y = dodel.y + DODEL_SIZE;
+    
+    document.getElementById('highscore').textContent = `Best: ${highScore}`;
+    updateUI();
+}
+
+function updateUI() {
+    document.getElementById('score').textContent = score;
+}
+
+function startGame() {
+    running = true;
+    document.getElementById('overlay').classList.add('hidden');
+    init();
+}
+
+function showOverlay(title, color) {
+    running = false;
+    const ov = document.getElementById('overlay');
+    ov.classList.remove('hidden');
+    const h1 = ov.querySelector('h1');
+    h1.textContent = title;
+    h1.style.color = color;
+    ov.querySelector('p').textContent = `Score: ${score}`;
+    ov.querySelector('.sub').textContent = 'Press any key to try again';
+    
+    if (score > highScore) {
+        highScore = score;
+        localStorage.setItem('doodleHighScore', highScore);
+        document.getElementById('highscore').textContent = `New Best: ${highScore}!`;
+    } else {
+        document.getElementById('highscore').textContent = `Best: ${highScore}`;
+    }
+}
+
+window.addEventListener('keydown', e => {
+    keys[e.key] = true;
+    if (!running) {
+        startGame();
+        return;
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+        dodel.dir = -1;
+    }
+    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+        dodel.dir = 1;
+    }
+});
+
+window.addEventListener('keyup', e => {
+    keys[e.key] = false;
+    if ((e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') && dodel.dir === -1 &&
+        !(keys['ArrowRight'] || keys['d'] || keys['D'])) {
+        dodel.dir = 0;
+    }
+    if ((e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') && dodel.dir === 1 &&
+        !(keys['ArrowLeft'] || keys['a'] || keys['A'])) {
+        dodel.dir = 0;
+    }
+});
+
+function generatePlatform() {
+    const types = ['normal', 'normal', 'normal', 'moving'];
+    if (score > 1000) types.push('breaking', 'moving', 'moving');
+    if (score > 3000) types.push('breaking', 'breaking');
+    
+    return {
+        x: Math.random() * (W - PLAT_W),
+        y: -100,
+        w: PLAT_W,
+        h: PLAT_H,
+        type: types[Math.floor(Math.random() * types.length)],
+        moveDir: Math.random() < 0.5 ? 1 : -1,
+        moveSpeed: 2 + Math.random() * 2,
+        breakTimer: 0,
+        breaking: false
+    };
+}
+
+function update() {
+    if (!running) return;
+    frame++;
+    
+    // Horizontal movement
+    dodel.vx = dodel.dir * 8;
+    dodel.x += dodel.vx;
+    
+    // Wrap around screen
+    if (dodel.x + dodel.w < 0) dodel.x = W;
+    if (dodel.x > W) dodel.x = -dodel.w;
+    
+    // Gravity
+    dodel.vy += 0.4;
+    
+    // Min jump velocity (when on a platform)
+    if (dodel.vy > -14) dodel.vy = -14;
+    
+    dodel.y += dodel.vy;
+    
+    // Platform collision — only when falling
+    if (dodel.vy >= 0) {
+        for (let p of platforms) {
+            if (p.broken) continue;
+            
+            const playerFeet = dodel.y + dodel.h;
+            const playerBottom = dodel.y + dodel.h - 5;
+            
+            if (playerBottom >= p.y && playerBottom <= p.y + p.h + 8 &&
+                dodel.x + dodel.w > p.x && dodel.x < p.x + p.w) {
+                
+                if (p.type === 'breaking' && !p.breaking) {
+                    p.breaking = true;
+                    p.breakTimer = 15;
+                    continue;
+                }
+                
+                dodel.y = p.y - dodel.h;
+                dodel.vy = -14;
+                
+                // Spring boost
+                if (p.type === 'spring') {
+                    dodel.vy = -18;
+                }
+                break;
+            }
+        }
+    }
+    
+    // Update moving platforms
+    for (let p of platforms) {
+        if (p.type === 'moving' && !p.broken && !p.breaking) {
+            p.x += p.moveDir * p.moveSpeed;
+            if (p.x <= 0 || p.x + p.w >= W) p.moveDir *= -1;
+        }
+        if (p.breaking) {
+            p.breakTimer--;
+            if (p.breakTimer <= 0) p.broken = true;
+        }
+    }
+    
+    // Scroll camera upward when dodel goes past middle
+    const targetY = H * 0.45 - dodel.y;
+    if (targetY > 0) {
+        cameraY += targetY * 0.1;
+        dodel.y += targetY * 0.1;
+        
+        // Move all platforms down
+        for (let p of platforms) {
+            p.y += targetY * 0.1;
+        }
+    }
+    
+    // Update score
+    score = Math.max(score, Math.floor(-dodel.y / 10));
+    updateUI();
+    
+    // Remove platforms far below and add new ones above
+    platforms = platforms.filter(p => p.y < H + 200 && !p.broken);
+    
+    // Keep enough platforms on screen
+    const highestPlat = Math.min(...platforms.map(p => p.y));
+    if (highestPlat > -50) {
+        platforms.push(generatePlatform());
+    }
+    
+    // Game over if fell below screen
+    if (dodel.y > H) {
+        showOverlay('Game Over', '#ff4444');
+        return;
+    }
+}
+
+function drawPlatforms() {
+    for (let p of platforms) {
+        if (p.broken) continue;
+        
+        if (p.breaking) {
+            ctx.fillStyle = `rgba(255, 68, 68, ${p.breakTimer / 15})`;
+            ctx.fillRect(p.x, p.y, p.w, p.h);
+        } else {
+            switch(p.type) {
+                case 'normal':
+                    ctx.fillStyle = '#44ff44';
+                    break;
+                case 'moving':
+                    ctx.fillStyle = '#4488ff';
+                    break;
+                case 'breaking':
+                    ctx.fillStyle = '#ff4444';
+                    break;
+                case 'spring':
+                    ctx.fillStyle = '#ff44ff';
+                    break;
+            }
+            ctx.fillRect(p.x, p.y, p.w, p.h);
+            
+             // Platform highlight
+            ctx.fillStyle = 'rgba(255,255,255,0.3)';
+            ctx.fillRect(p.x, p.y, p.w, 3);
+        }
+    }
+}
+
+function drawDodel() {
+    const x = dodel.x;
+    const y = dodel.y;
+    const w = dodel.w;
+    const h = dodel.h;
+    
+    ctx.fillStyle = '#44ff44';
+    
+    // Body
+    const radius = w * 0.35;
+    ctx.beginPath();
+    ctx.arc(x + w/2, y + h*0.5, radius, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Eyes
+    ctx.fillStyle = '#000';
+    const eyeOffX = dodel.dir === -1 ? -3 : dodel.dir === 1 ? 3 : 0;
+    ctx.beginPath();
+    ctx.arc(x + w*0.35 + eyeOffX, y + h*0.4, radius*0.25, 0, Math.PI * 2);
+    ctx.arc(x + w*0.65 + eyeOffX, y + h*0.4, radius*0.25, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Feet
+    ctx.fillStyle = '#44ff44';
+    ctx.fillRect(x + w*0.25, y + h*0.75, w*0.2, h*0.2);
+    ctx.fillRect(x + w*0.55, y + h*0.75, w*0.2, h*0.2);
+}
+
+function drawBackground() {
+      // Subtle gradient
+    const gradient = ctx.createLinearGradient(0, 0, 0, H);
+    gradient.addColorStop(0, '#0a0a1a');
+    gradient.addColorStop(1, '#0a0a0a');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, H);
+    
+     // Height markers
+    ctx.fillStyle = '#222';
+    ctx.font = '14px Courier New';
+    ctx.textAlign = 'right';
+    const markerStep = 500;
+    for (let m = 0; m <= score + markerStep; m += markerStep) {
+        const markerY = H * 0.45 - (m * 10) * 0.1;
+        if (markerY > 20 && markerY < H - 20) {
+            ctx.fillText(`${m}`, W - 20, markerY);
+           }
+        ctx.strokeStyle = '#1a1a1a';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, markerY);
+        ctx.lineTo(W * 0.5, markerY);
+        ctx.stroke();
+       }
+}
+
+function draw() {
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, W, H);
+    
+    drawBackground();
+    drawPlatforms();
+    if (running) drawDodel();
+}
+
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>

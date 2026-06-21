@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fractals</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+canvas { display: block; width: 100vw; height: 100vh; }
+#controls {
+    position: absolute; top: 20px; right: 20px;
+    background: rgba(0,0,0,0.88); border: 1px solid #333;
+    padding: 20px; border-radius: 8px; color: #ccc;
+    min-width: 240px; pointer-events: auto;
+}
+#controls.hidden { display: none; }
+#controls h2 { color: #44ff88; font-size: 16px; letter-spacing: 3px; margin-bottom: 16px; text-transform: uppercase; }
+#controls label { display: block; font-size: 11px; margin-bottom: 6px; letter-spacing: 1px; color: #666; text-transform: uppercase; }
+#controls select {
+    width: 100%; background: #111; border: 1px solid #333; color: #fff;
+    padding: 6px 8px; border-radius: 4px; margin-bottom: 14px; font-size: 12px; cursor: pointer;
+}
+#controls select:focus { outline: none; border-color: #44ff88; }
+.slider-row { margin-bottom: 14px; }
+.slider-row span { font-size: 12px; color: #44ff88; display: block; text-align: right; margin-top: 3px; }
+input[type="range"] { -webkit-appearance: none; width: 100%; height: 4px; background: #222; border: none; border-radius: 2px; }
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px;
+    background: #44ff88; border-radius: 50%; cursor: pointer;
+}
+#mode-toggle { display: flex; gap: 4px; margin-bottom: 16px; }
+#mode-toggle button {
+    flex: 1; padding: 8px; background: #111; border: 1px solid #333;
+    color: #888; cursor: pointer; font-family: 'Courier New'; font-size: 11px;
+    letter-spacing: 1px; text-transform: uppercase; border-radius: 4px; transition: all 0.2s;
+}
+#mode-toggle button.active { border-color: #44ff88; color: #44ff88; background: rgba(68,255,136,0.1); }
+#julia-params { margin-bottom: 14px; }
+#toggle-btn {
+    position: absolute; top: 20px; right: 20px;
+    background: rgba(0,0,0,0.7); border: 1px solid #44ff88; color: #44ff88;
+    width: 36px; height: 36px; cursor: pointer; font-size: 18px;
+    border-radius: 4px; z-index: 5; transition: all 0.2s;
+    display: flex; align-items: center; justify-content: center;
+}
+#toggle-btn:hover { background: rgba(68,255,136,0.2); }
+#toggle-btn.hidden { display: none; }
+#info {
+    position: absolute; bottom: 20px; left: 20px;
+    color: #444; font-size: 11px; letter-spacing: 1px; pointer-events: none; line-height: 1.6;
+}
+#zoom-info {
+    position: absolute; bottom: 20px; right: 20px;
+    color: #333; font-size: 11px; font-family: 'Courier New'; pointer-events: none;
+    text-align: right; line-height: 1.6;
+}
+#selection {
+    position: absolute; border: 2px solid #44ff88;
+    background: rgba(68,255,136,0.06); pointer-events: none; display: none;
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="selection"></div>
+
+<button id="toggle-btn" onclick="toggleControls()">⚙</button>
+
+<div id="controls" class="hidden">
+    <h2>Fractals</h2>
+    <div id="mode-toggle">
+        <button class="active" onclick="setMode('mandelbrot')">Mandelbrot</button>
+        <button onclick="setMode('julia')">Julia</button>
+        <button onclick="setMode('burning')">Burning</button>
+    </div>
+
+    <label>Color Scheme</label>
+    <select id="color-scheme" onchange="needsRender = true;">
+        <option value="0">Cosine Rainbow</option>
+        <option value="1">Inferno</option>
+        <option value="2">Deep Ocean</option>
+        <option value="3">Electric</option>
+        <option value="4">Neon Noir</option>
+        <option value="5">Monochrome</option>
+        <option value="6">Aurora</option>
+    </select>
+
+    <div class="slider-row">
+        <label>Iterations</label>
+        <input type="range" id="iterations" min="50" max="500" value="200" step="10" oninput="maxIter = parseInt(this.value); document.getElementById('iter-val').textContent = this.value; needsRender = true;">
+        <span id="iter-val">200</span>
+    </div>
+
+    <div class="slider-row" id="julia-params" style="display:none; border-top: 1px solid #222; padding-top: 14px;">
+        <label>Julia constant c</label>
+        <div style="margin-bottom: 6px;">
+            <span style="font-size: 10px; color: #555;">Real</span>
+            <input type="range" id="jc-re" min="-2" max="2" value="-0.726" step="0.001" oninput="updateJulia()">
+            <span id="jre-val">-0.726</span>
+        </div>
+        <div>
+            <span style="font-size: 10px; color: #555;">Imaginary</span>
+            <input type="range" id="jc-im" min="-2" max="2" value="0.188" step="0.001" oninput="updateJulia()">
+            <span id="jim-val">0.188</span>
+        </div>
+        <div style="margin-top: 4px;">
+            <label>Preset</label>
+            <input type="range" id="julia-preset" min="0" max="9" value="0" step="1" style="margin-top: 4px;" oninput="juliaPreset(this.value)">
+        </div>
+    </div>
+
+    <div class="slider-row">
+        <label>Color Frequency</label>
+        <input type="range" id="smooth" min="1" max="20" value="8" step="1" oninput="colorFreq = parseInt(this.value); needsRender = true;">
+        <span id="smooth-val">8</span>
+    </div>
+
+    <div style="margin-top: 16px; display: flex; gap: 8px;">
+        <button onclick="resetView()" style="flex: 1; padding: 8px; background: #222; border: 1px solid #444; color: #aaa; font-family: Courier New; font-size: 11px; letter-spacing: 1px; cursor: pointer; border-radius: 4px; text-transform: uppercase;">Reset</button>
+        <button onclick="screenshot()" style="flex: 1; padding: 8px; background: #222; border: 1px solid #444; color: #aaa; font-family: Courier New; font-size: 11px; letter-spacing: 1px; cursor: pointer; border-radius: 4px; text-transform: uppercase;">Save</button>
+    </div>
+</div>
+
+<div id="info">Drag to zoom in · Scroll to zoom out · Double-click to zoom 2x</div>
+<div id="zoom-info"></div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: true });
+const selection = document.getElementById('selection');
+const zoomInfo = document.getElementById('zoom-info');
+
+let width, height;
+let centerX = -0.5, centerY = 0;
+let viewScale = 3.0;
+let mode = 'mandelbrot';
+let maxIter = 200;
+let colorFreq = 8;
+let juliaC_re = -0.726;
+let juliaC_im = 0.188;
+
+let needsRender = true;
+let animFrame;
+
+// Julia presets
+const juliaPresets = [
+    { re: -0.726, im: 0.188, name: 'Classic' },
+    { re: -0.4, im: 0.6, name: 'Spindle' },
+    { re: 0.285, im: 0.01, name: 'Dragon' },
+    { re: -0.835, im: -0.2321, name: 'Moth' },
+    { re: -0.16, im: 1.04, name: 'Elephant' },
+    { re: 0.37, im: 0.0687, name: 'Sculpture' },
+    { re: -0.5, im: 0.5743, name: 'Pine' },
+    { re: -0.1011, im: 0.65526, name: 'Sea Horse' },
+    { re: -0.81, im: 0.182, name: 'Starfish' },
+    { re: 0.0, im: 1.0, name: 'Bifurcation' },
+];
+
+// WebGL boilerplate
+const vsSrc = `
+attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+`;
+
+const fsSrc = `
+precision highp float;
+const int MAX_ITER = 200;
+
+uniform vec2 u_res;
+uniform vec2 u_center;
+uniform float u_scale;
+uniform int u_mode;
+uniform vec2 u_julia;
+uniform int u_colorscheme;
+uniform int u_maxiter;
+uniform float u_freq;
+
+vec3 palette(float t, int scheme) {
+    vec3 a, b, c, d;
+
+    if (scheme == 0) {
+         // cosine rainbow
+        a = vec3(0.5); b = vec3(0.5);
+        c = vec3(1.0); d = vec3(0.00, 0.33, 0.67);
+    } else if (scheme == 1) {
+         // inferno
+        a = vec3(0.5); b = vec3(0.5);
+        c = vec3(1.0); d = vec3(0.00, 0.15, 0.68);
+    } else if (scheme == 2) {
+         // ocean
+        a = vec3(0.5); b = vec3(0.5);
+        c = vec3(1.0); d = vec3(0.00, 0.10, 0.47);
+    } else if (scheme == 3) {
+         // electric
+        a = vec3(0.5); b = vec3(0.5);
+        c = vec3(1.0); d = vec3(0.00, 0.25, 0.50);
+    } else if (scheme == 4) {
+         // neon noir
+        a = vec3(0.5); b = vec3(0.5);
+        c = vec3(1.0); d = vec3(0.80, 0.90, 0.20);
+    } else if (scheme == 5) {
+         // monochrome
+        a = vec3(0.5); b = vec3(0.5);
+        c = vec3(1.0); d = vec3(0.00);
+    } else {
+         // aurora
+        a = vec3(0.5); b = vec3(0.5);
+        c = vec3(1.0); d = vec3(0.33, 0.50, 0.67);
+    }
+
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void main() {
+    vec2 fragCoord = gl_FragCoord.xy;
+    vec2 uv = fragCoord / u_res;
+    vec2 c;
+    vec2 z;
+    int iter = 0;
+
+    if (u_mode == 0) {
+         // Mandelbrot: z = z^2 + c, z0 = 0
+        z = vec2(0.0);
+        c = (uv - 0.5) * u_scale + u_center;
+        iter = 0;
+        for (int i = 0; i < 1000; i++) {
+            if (i >= u_maxiter) break;
+            if (dot(z, z) > 4.0) break;
+            z = vec2(z.x*z.x - z.y*z.y, 2.0*z.x*z.y) + c;
+            iter = i;
+          }
+      } else if (u_mode == 1) {
+            // Julia: z = z^2 + c, z0 = uv mapped to complex plane
+        z = (uv - 0.5) * 2.0;
+        c = u_julia;
+        iter = 0;
+        for (int i = 0; i < 1000; i++) {
+            if (i >= u_maxiter) break;
+            if (dot(z, z) > 4.0) break;
+            z = vec2(z.x*z.x - z.y*z.y, 2.0*z.x*z.y) + c;
+            iter = i;
+          }
+      } else {
+            // Burning Ship
+        z = vec2(0.0);
+        c = (uv - 0.5) * u_scale + u_center;
+        iter = 0;
+        for (int i = 0; i < 1000; i++) {
+            if (dot(z, z) > 4.0) break;
+            float zr = abs(z.x);
+            float zi = abs(z.y);
+            z = vec2(zr*zr - zi*zi, 2.0*zr*zi) + c;
+            iter = i;
+         }
+     }
+    if (iter >= 1000) {
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+
+    // Smooth (continuous) coloring
+    float sl = float(iter) - log2(log2(dot(z, z))) + 4.0;
+    float t = fract(sl / float(u_maxiter) * u_freq);
+    vec3 color = palette(t, u_colorscheme);
+
+    // Fade black near escape boundary for smoother look
+    float fade = clamp(sl / 4.0, 0.0, 1.0);
+    gl_FragColor = vec4(color * fade, 1.0);
+}
+`;
+
+function compileShader(src, type) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+}
+
+const vs = compileShader(vsSrc, gl.VERTEX_SHADER);
+const fs = compileShader(fsSrc, gl.FRAGMENT_SHADER);
+const prog = gl.createProgram();
+gl.attachShader(prog, vs);
+gl.attachShader(prog, fs);
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const posBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+// Uniforms
+const uRes = gl.getUniformLocation(prog, 'u_res');
+const uCenter = gl.getUniformLocation(prog, 'u_center');
+const uScale = gl.getUniformLocation(prog, 'u_scale');
+const uMode = gl.getUniformLocation(prog, 'u_mode');
+const uJulia = gl.getUniformLocation(prog, 'u_julia');
+const uColorscheme = gl.getUniformLocation(prog, 'u_colorscheme');
+const uMaxiter = gl.getUniformLocation(prog, 'u_maxiter');
+const uFreq = gl.getUniformLocation(prog, 'u_freq');
+
+// Julia preset display
+function updateJulia() {
+    juliaC_re = parseFloat(document.getElementById('jc-re').value);
+    juliaC_im = parseFloat(document.getElementById('jc-im').value);
+    document.getElementById('jre-val').textContent = juliaC_re.toFixed(3);
+    document.getElementById('jim-val').textContent = juliaC_im.toFixed(3);
+    needsRender = true;
+}
+
+function juliaPreset(v) {
+    const p = juliaPresets[parseInt(v)];
+    juliaC_re = p.re;
+    juliaC_im = p.im;
+    document.getElementById('jc-re').value = p.re;
+    document.getElementById('jc-im').value = p.im;
+    document.getElementById('jre-val').textContent = p.re.toFixed(3);
+    document.getElementById('jim-val').textContent = p.im.toFixed(3);
+    needsRender = true;
+}
+
+function setMode(m) {
+    mode = m;
+    document.querySelectorAll('#mode-toggle button').forEach((b, i) => {
+        b.classList.toggle('active', (m === 'mandelbrot' && i === 0) || (m === 'julia' && i === 1) || (m === 'burning' && i === 2));
+    });
+    document.getElementById('julia-params').style.display = m === 'julia' ? 'block' : 'none';
+    if (m === 'mandelbrot') { centerX = -0.5; centerY = 0; viewScale = 3.0; }
+    else if (m === 'julia') { centerX = 0; centerY = 0; viewScale = 2.5; }
+    else { centerX = -0.4; centerY = -0.15; viewScale = 1.6; }
+    needsRender = true;
+}
+
+function resetView() {
+    setMode(mode);
+}
+
+function toggleControls() {
+    document.getElementById('controls').classList.toggle('hidden');
+    document.getElementById('toggle-btn').classList.toggle('hidden');
+}
+
+function screenshot() {
+    const link = document.createElement('a');
+    link.download = `fractal-${mode}-${Date.now()}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+}
+
+function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    needsRender = true;
+}
+
+function render() {
+    const m = mode === 'mandelbrot' ? 0 : mode === 'julia' ? 1 : 2;
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform2f(uCenter, centerX, centerY);
+    gl.uniform1f(uScale, viewScale * canvas.width / width);
+    gl.uniform1i(uMode, m);
+    gl.uniform2f(uJulia, juliaC_re, juliaC_im);
+    gl.uniform1i(uColorscheme, parseInt(document.getElementById('color-scheme').value));
+    gl.uniform1i(uMaxiter, maxIter);
+    gl.uniform1f(uFreq, colorFreq);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+}
+
+function updateZoomInfo() {
+    const depth = Math.log10(3.0 / viewScale);
+    const dir = mode === 'mandelbrot' ? 'Mandelbrot' : mode === 'julia' ? 'Julia' : 'Burning Ship';
+    zoomInfo.innerHTML = `${dir} fractal<br>Depth: ${depth.toFixed(1)}x<br>Center: ${centerX.toFixed(8)}, ${centerY.toFixed(8)}<br>Iterations: ${maxIter}`;
+}
+
+function loop() {
+    if (needsRender) { render(); needsRender = false; }
+    updateZoomInfo();
+    animFrame = requestAnimationFrame(loop);
+}
+
+// --- Interaction: drag/zoom ---
+let dragging = false, dragSX, dragSY;
+
+canvas.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    dragging = true;
+    dragSX = e.clientX; dragSY = e.clientY;
+    selection.style.display = 'block';
+    selection.style.left = dragSX + 'px';
+    selection.style.top = dragSY + 'px';
+    selection.style.width = '0';
+    selection.style.height = '0';
+});
+
+canvas.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const x = Math.max(0, Math.min(dragSX, e.clientX));
+    const y = Math.max(0, Math.min(dragSY, e.clientY));
+    const w = Math.abs(e.clientX - dragSX);
+    const h = Math.abs(e.clientY - dragSY);
+    selection.style.left = x + 'px';
+    selection.style.top = y + 'px';
+    selection.style.width = w + 'px';
+    selection.style.height = h + 'px';
+});
+
+canvas.addEventListener('mouseup', e => {
+    if (!dragging) return;
+    dragging = false;
+    selection.style.display = 'none';
+
+    const dx = Math.abs(e.clientX - dragSX);
+    const dy = Math.abs(e.clientY - dragSY);
+
+    // Tap (no drag) = zoom 2x at tap point
+    if (dx < 4 && dy < 4) {
+        const uvX = (dragSX / width - 0.5);
+        const uvY = (dragSY / height - 0.5);
+        centerX += uvX * viewScale * (width / canvas.width) * 0.5;
+        centerY += uvY * viewScale * (height / canvas.height) * 0.5;
+        viewScale /= 2;
+        needsRender = true;
+        return;
+    }
+
+    // Box zoom
+    if (dx * dx + dy * dy < 100) return;
+
+    const midX = (dragSX + e.clientX) / 2;
+    const midY = (dragSY + e.clientY) / 2;
+    const uvX = (midX / width - 0.5);
+    const uvY = (midY / height - 0.5);
+
+    centerX += uvX * viewScale * (width / canvas.width) * 2;
+    centerY += uvY * viewScale * (height / canvas.height) * 2;
+    viewScale *= Math.min(width / dx, height / dy) / 3;
+    viewScale = Math.min(viewScale, 1e14);
+    needsRender = true;
+});
+
+// Scroll zoom
+canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const factor = e.deltaY > 0 ? 0.7 : 1.4;
+    const uvX = (e.clientX / width - 0.5);
+    const uvY = (e.clientY / height - 0.5);
+    centerX += uvX * viewScale * (width / canvas.width) * (factor - 1) * 2;
+    centerY += uvY * viewScale * (height / canvas.height) * (factor - 1) * 2;
+    viewScale *= factor;
+    viewScale = Math.min(viewScale, 1e14);
+    needsRender = true;
+}, { passive: false });
+
+// Double-click zoom
+canvas.addEventListener('dblclick', e => {
+    e.preventDefault();
+    const uvX = (e.clientX / width - 0.5);
+    const uvY = (e.clientY / height - 0.5);
+    centerX += uvX * viewScale * (width / canvas.width) * 0.5;
+    centerY += uvY * viewScale * (height / canvas.height) * 0.5;
+    viewScale /= 2;
+    viewScale = Math.min(viewScale, 1e14);
+    needsRender = true;
+});
+
+// Touch support
+let pinchDist = 0, pinchMid = { x: 0, y: 0 };
+let touches = {};
+
+canvas.addEventListener('touchstart', e => {
+    for (let t of e.changedTouches) touches[t.identifier] = t;
+    if (e.touches.length === 1) {
+        const t = e.touches[0];
+        dragging = true;
+        dragSX = t.clientX; dragSY = t.clientY;
+        selection.style.display = 'block';
+        selection.style.left = dragSX + 'px';
+        selection.style.top = dragSY + 'px';
+        selection.style.width = '0';
+        selection.style.height = '0';
+    } else if (e.touches.length === 2) {
+        dragging = false;
+        const t1 = e.touches[0], t2 = e.touches[1];
+        pinchDist = Math.sqrt((t2.clientX - t1.clientX)**2 + (t2.clientY - t1.clientY)**2);
+        pinchMid = { x: (t1.clientX + t2.clientX)/2, y: (t1.clientY + t2.clientY)/2 };
+    }
+    if (e.touches.length === 0) dragging = false;
+}, { passive: true });
+
+canvas.addEventListener('touchmove', e => {
+    if (e.touches.length === 1 && dragging) {
+        const t = e.touches[0];
+        const x = Math.max(0, Math.min(dragSX, t.clientX));
+        const y = Math.max(0, Math.min(dragSY, t.clientY));
+        selection.style.left = x + 'px';
+        selection.style.top = y + 'px';
+        selection.style.width = Math.abs(t.clientX - dragSX) + 'px';
+        selection.style.height = Math.abs(t.clientY - dragSY) + 'px';
+    } else if (e.touches.length === 2) {
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const dist = Math.sqrt((t2.clientX - t1.clientX)**2 + (t2.clientY - t1.clientY)**2);
+        const scale = dist / pinchDist;
+        pinchDist = dist;
+        const midX = (t1.clientX + t2.clientX) / 2;
+        const midY = (t1.clientY + t2.clientY) / 2;
+        const uvX = (midX / width - 0.5);
+        const uvY = (midY / height - 0.5);
+        centerX += uvX * viewScale * (width / canvas.width) * (scale - 1) * 2;
+        centerY += uvY * viewScale * (height / canvas.height) * (scale - 1) * 2;
+        viewScale *= scale;
+        viewScale = Math.min(viewScale, 1e14);
+        needsRender = true;
+    }
+}, { passive: true });
+
+canvas.addEventListener('touchend', e => {
+    if (e.touches.length < 2) pinchDist = 0;
+    if (e.touches.length === 0) {
+        dragging = false;
+        selection.style.display = 'none';
+     }
+});
+
+resize();
+setMode('mandelbrot');
+window.addEventListener('resize', resize);
+loop();
+</script>
+</body>
+</html>
